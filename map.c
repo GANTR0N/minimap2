@@ -523,6 +523,7 @@ static void merge_hits(step_t *s)
 	km_destroy(km);
 }
 
+//This seems to be what we will parallelize
 static void *worker_pipeline(void *shared, int step, void *in)
 {
 	int i, j, k;

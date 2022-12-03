@@ -1,4 +1,5 @@
-CFLAGS=		-g -Wall -O2 -Wc++-compat #-Wextra
+CC =nvcc
+CFLAGS=		-O2
 CPPFLAGS=	-DHAVE_KALLOC
 INCLUDES=
 OBJS=		kthread.o kalloc.o misc.o bseq.o sketch.o sdust.o options.o index.o \

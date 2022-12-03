@@ -94,6 +94,8 @@ typedef struct ktp_t {
 	pthread_cond_t cv;
 } ktp_t;
 
+
+//uses several threads, look into pthread.c
 static void *ktp_worker(void *data)
 {
 	ktp_worker_t *w = (ktp_worker_t*)data;
@@ -127,6 +129,7 @@ static void *ktp_worker(void *data)
 	pthread_exit(0);
 }
 
+// Creates workers that then work together on doing the function defined by the worker_pipeline function
 void kt_pipeline(int n_threads, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
 	ktp_t aux;

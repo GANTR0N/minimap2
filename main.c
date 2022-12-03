@@ -6,6 +6,7 @@
 #include "minimap.h"
 #include "mmpriv.h"
 #include "ketopt.h"
+#include "cuda.h"
 
 #define MM_VERSION "2.24-r1150-dirty"
 
@@ -388,7 +389,7 @@ int main(int argc, char *argv[])
 	}
 	if (opt.best_n == 0 && (opt.flag&MM_F_CIGAR) && mm_verbose >= 2)
 		fprintf(stderr, "[WARNING]\033[1;31m `-N 0' reduces alignment accuracy. Please use --secondary=no to suppress secondary alignments.\033[0m\n");
-	while ((mi = mm_idx_reader_read(idx_rdr, n_threads)) != 0) {
+	while ((mi = mm_idx_reader_read(idx_rdr, n_threads)) != 0) { // look into this comman and n_threads
 		int ret;
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");
@@ -427,11 +428,11 @@ int main(int argc, char *argv[])
 		ret = 0;
 		if (!(opt.flag & MM_F_FRAG_MODE)) {
 			for (i = o.ind + 1; i < argc; ++i) {
-				ret = mm_map_file(mi, argv[i], &opt, n_threads);
+				ret = mm_map_file(mi, argv[i], &opt, n_threads); //look into this line
 				if (ret < 0) break;
 			}
 		} else {
-			ret = mm_map_file_frag(mi, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads);
+			ret = mm_map_file_frag(mi, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads); // look into this line
 		}
 		mm_idx_destroy(mi);
 		if (ret < 0) {
