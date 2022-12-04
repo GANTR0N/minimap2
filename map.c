@@ -2,7 +2,7 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
-#include "kthread.h"
+#include "kthread.cuh"
 #include "kvec.h"
 #include "kalloc.h"
 #include "sdust.h"
@@ -524,6 +524,7 @@ static void merge_hits(step_t *s)
 }
 
 //This seems to be what we will parallelize
+//This is essentially a function used by the parallelization thread, might not require parallelization tho
 static void *worker_pipeline(void *shared, int step, void *in)
 {
 	int i, j, k;

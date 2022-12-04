@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdint.h>
-#include "kthread.h"
+#include "kthread.cuh"
+#include <cuda.h>
 
 #if (defined(WIN32) || defined(_WIN32)) && defined(_MSC_VER)
 #define __sync_fetch_and_add(ptr, addend)     _InterlockedExchangeAdd((void*)ptr, addend)
@@ -98,38 +99,69 @@ typedef struct ktp_t {
 //uses several threads, look into pthread.c
 static void *ktp_worker(void *data)
 {
-	ktp_worker_t *w = (ktp_worker_t*)data;
-	ktp_t *p = w->pl;
-	while (w->step < p->n_steps) {
+	ktp_worker_t *w = (ktp_worker_t*)data; //creates a worker given data
+	ktp_t *p = w->pl; //grabs the ktp struct from the worker
+	while (w->step < p->n_steps) { // similar to if(n<N) from CUDA
 		// test whether we can kick off the job with this worker
-		pthread_mutex_lock(&p->mutex);
+		pthread_mutex_lock(&p->mutex); //mutex is a synchronization lock to protect multiple thread access
 		for (;;) {
 			int i;
 			// test whether another worker is doing the same step
 			for (i = 0; i < p->n_workers; ++i) {
 				if (w == &p->workers[i]) continue; // ignore itself
-				if (p->workers[i].step <= w->step && p->workers[i].index < w->index)
+				if (p->workers[i].step <= w->step && p->workers[i].index < w->index)//if a different worker has a step less than or equal to ours, and their index is less than ours
 					break;
 			}
 			if (i == p->n_workers) break; // no workers with smaller indices are doing w->step or the previous steps
-			pthread_cond_wait(&p->cv, &p->mutex);
+			pthread_cond_wait(&p->cv, &p->mutex); //seems like it's similar to syncthreads
 		}
 		pthread_mutex_unlock(&p->mutex);
 
 		// working on w->step
+		//Consider editing this function to be a CUDA __device__ function?
 		w->data = p->func(p->shared, w->step, w->step? w->data : 0); // for the first step, input is NULL
+		//the data of the worker is done by using the function on shared data, for a specific step, and the step value seems to be null at first? I think this is because the 
+		//data has yet to be filled, and step exists the final value in the function is NULL. For future steps, data won't be null.
 
 		// update step and let other workers know
 		pthread_mutex_lock(&p->mutex);
 		w->step = w->step == p->n_steps - 1 || w->data? (w->step + 1) % p->n_steps : p->n_steps;
-		if (w->step == 0) w->index = p->index++;
+		//step = 1 if it's one less than total n_steps, second part is confusing but the ternary is saying 
+		//if the data in the worker exists,
+		if (w->step == 0) w->index = p->index++; //if the step is 0, the worker index is set to the struct index + 1, which I believe means it fails the while loop next time around
 		pthread_cond_broadcast(&p->cv);
 		pthread_mutex_unlock(&p->mutex);
 	}
-	pthread_exit(0);
+	pthread_exit(0); 
+}
+
+//Data = a worker struct
+//N = number of total workers 
+__global__ void cuda_worker(int N, void *data)
+{
+	int t = threadIdx.x;
+	int b = blockIdx.x;
+	int B = blockDim.x;
+
+	int n = t + b*B;
+
+	ktp_worker_t *w = (ktp_worker_t*)data;
+	ktp_t *p = w->pl;
+	if(n<N){
+		
+	}
+}
+
+void cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
+{
+	int e = 1;
 }
 
 // Creates workers that then work together on doing the function defined by the worker_pipeline function
+//n_threads = number of threads
+//func = the function each worker will carry out
+//shared_data = the pipeline struct pointer that is sent to the function
+//n_steps = the number of steps for each thread
 void kt_pipeline(int n_threads, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
 	ktp_t aux;
@@ -137,24 +169,24 @@ void kt_pipeline(int n_threads, void *(*func)(void*, int, void*), void *shared_d
 	int i;
 
 	if (n_threads < 1) n_threads = 1;
-	aux.n_workers = n_threads;
-	aux.n_steps = n_steps;
-	aux.func = func;
-	aux.shared = shared_data;
+	aux.n_workers = n_threads; //one worker per thread
+	aux.n_steps = n_steps; //number of steps
+	aux.func = func; //the function given
+	aux.shared = shared_data; //maybe the data given to this pipeline to work on?
 	aux.index = 0;
 	pthread_mutex_init(&aux.mutex, 0);
 	pthread_cond_init(&aux.cv, 0);
 
-	aux.workers = (ktp_worker_t*)calloc(n_threads, sizeof(ktp_worker_t));
-	for (i = 0; i < n_threads; ++i) {
-		ktp_worker_t *w = &aux.workers[i];
-		w->step = 0; w->pl = &aux; w->data = 0;
-		w->index = aux.index++;
+	aux.workers = (ktp_worker_t*)calloc(n_threads, sizeof(ktp_worker_t)); //creates a worker for each thread and callocs an array
+	for (i = 0; i < n_threads; ++i) { //assigning index values to each worker
+		ktp_worker_t *w = &aux.workers[i]; 
+		w->step = 0; w->pl = &aux; w->data = 0; //w->pl allows the worker struct to reference the struct it's contained inside
+		w->index = aux.index++; //increments the index each time through
 	}
 
-	tid = (pthread_t*)calloc(n_threads, sizeof(pthread_t));
-	for (i = 0; i < n_threads; ++i) pthread_create(&tid[i], 0, ktp_worker, &aux.workers[i]);
-	for (i = 0; i < n_threads; ++i) pthread_join(tid[i], 0);
+	tid = (pthread_t*)calloc(n_threads, sizeof(pthread_t)); //tid is storing n thread objects
+	for (i = 0; i < n_threads; ++i) pthread_create(&tid[i], 0, ktp_worker, &aux.workers[i]); //creating a thread with the index's thread object, that does the function "ktp_worker", using a specific worker
+	for (i = 0; i < n_threads; ++i) pthread_join(tid[i], 0); //gets the returned values from the threads
 	free(tid); free(aux.workers);
 
 	pthread_mutex_destroy(&aux.mutex);
