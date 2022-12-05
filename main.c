@@ -122,7 +122,7 @@ static inline void yes_or_no(mm_mapopt_t *opt, int64_t flag, int long_idx, const
 
 int main(int argc, char *argv[])
 {
-	const char *opt_str = "2aSDw:k:K:t:r:f:Vv:g:G:I:d:XT:s:x:Hcp:M:n:z:A:B:O:E:m:N:Qu:R:hF:LC:yYPo:e:U:j:";
+	const char *opt_str = "2aSDw:k:K:t:r:f:Vv:g:G:I:d:XT:s:x:Hcp:M:n:z:A:B:O:E:m:N:Qu:R:hF:LC:yYPo:e:U:j:J:";
 	ketopt_t o = KETOPT_INIT;
 	mm_mapopt_t opt;
 	mm_idxopt_t ipt;
@@ -132,6 +132,7 @@ int main(int argc, char *argv[])
 	mm_idx_reader_t *idx_rdr;
 	mm_idx_t *mi;
 
+	opt.cuda = 0;
 	mm_verbose = 3;
 	liftrlimit();
 	mm_realtime0 = realtime();
@@ -189,6 +190,7 @@ int main(int argc, char *argv[])
 		else if (c == 'R') rg = o.arg;
 		else if (c == 'h') fp_help = stdout;
 		else if (c == '2') opt.flag |= MM_F_2_IO_THREADS;
+		else if (c == 'J') opt.cuda = atoi(o.arg);
 		else if (c == 'o') {
 			if (strcmp(o.arg, "-") != 0) {
 				if (freopen(o.arg, "wb", stdout) == NULL) {
@@ -389,7 +391,8 @@ int main(int argc, char *argv[])
 	}
 	if (opt.best_n == 0 && (opt.flag&MM_F_CIGAR) && mm_verbose >= 2)
 		fprintf(stderr, "[WARNING]\033[1;31m `-N 0' reduces alignment accuracy. Please use --secondary=no to suppress secondary alignments.\033[0m\n");
-	while ((mi = mm_idx_reader_read(idx_rdr, n_threads)) != 0) { // look into this comman and n_threads
+	while ((mi = mm_idx_reader_read(idx_rdr, n_threads)) != 0) { // look into n_threads
+		fprintf(stderr, "HELLO\n");
 		int ret;
 		if ((opt.flag & MM_F_CIGAR) && (mi->flag & MM_I_NO_SEQ)) {
 			fprintf(stderr, "[ERROR] the prebuilt index doesn't contain sequences.\n");
@@ -429,11 +432,13 @@ int main(int argc, char *argv[])
 		if (!(opt.flag & MM_F_FRAG_MODE)) {
 			for (i = o.ind + 1; i < argc; ++i) {
 				ret = mm_map_file(mi, argv[i], &opt, n_threads); //look into this line
+				fprintf(stderr, "output here is %d\n", ret);
 				if (ret < 0) break;
 			}
 		} else {
 			ret = mm_map_file_frag(mi, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads); // look into this line
 		}
+		
 		mm_idx_destroy(mi);
 		if (ret < 0) {
 			fprintf(stderr, "ERROR: failed to map the query file\n");

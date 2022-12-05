@@ -1,8 +1,9 @@
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stdint.h>
-#include "kthread.cuh"
+#include "kthread.h"
 #include <cuda.h>
 
 #if (defined(WIN32) || defined(_WIN32)) && defined(_MSC_VER)
@@ -87,10 +88,12 @@ typedef struct {
 
 typedef struct ktp_t {
 	void *shared;
+	void *c_shared;
 	void *(*func)(void*, int, void*);
 	int64_t index;
 	int n_workers, n_steps;
 	ktp_worker_t *workers;
+	ktp_worker_t *c_workers;
 	pthread_mutex_t mutex;
 	pthread_cond_t cv;
 } ktp_t;
@@ -127,7 +130,8 @@ static void *ktp_worker(void *data)
 		pthread_mutex_lock(&p->mutex);
 		w->step = w->step == p->n_steps - 1 || w->data? (w->step + 1) % p->n_steps : p->n_steps;
 		//step = 1 if it's one less than total n_steps, second part is confusing but the ternary is saying 
-		//if the data in the worker exists,
+		//if the data in the worker exists, increment step by one modulo 3, if data doesn't exist, 3
+		//I have no idea what this has to do with the OR statement
 		if (w->step == 0) w->index = p->index++; //if the step is 0, the worker index is set to the struct index + 1, which I believe means it fails the while loop next time around
 		pthread_cond_broadcast(&p->cv);
 		pthread_mutex_unlock(&p->mutex);
@@ -137,24 +141,67 @@ static void *ktp_worker(void *data)
 
 //Data = a worker struct
 //N = number of total workers 
-__global__ void cuda_worker(int N, void *data)
+__global__ void cuda_worker(int N, ktp_worker_t** workers)
 {
 	int t = threadIdx.x;
 	int b = blockIdx.x;
 	int B = blockDim.x;
 
 	int n = t + b*B;
-
-	ktp_worker_t *w = (ktp_worker_t*)data;
-	ktp_t *p = w->pl;
 	if(n<N){
+		ktp_worker_t *w = workers[n];
+	
+		ktp_t *p = w->pl;
+		if(w->step < 3){
+			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
+		}
+		__syncthreads();
+		w->step = w->step+1;
+		if(w->step < 3){
+			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
+		}
+		__syncthreads();
+		w->step = w->step+1;
+		if(w->step < 3){
+			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
+		}
+		__syncthreads();
 		
 	}
 }
 
 void cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
-	int e = 1;
+	ktp_t aux;
+
+	int i;
+	if (N<1){N = 1;}
+	aux.n_workers = N; //one worker per thread
+	aux.n_steps = n_steps; //number of steps
+	aux.func = func; //the function given
+	aux.shared = shared_data; //maybe the data given to this pipeline to work on?
+	aux.index = 0;
+	aux.workers = (ktp_worker_t*)calloc(N, sizeof(ktp_worker_t)); //creates a worker for each thread and callocs an array
+	for (i = 0; i < N; ++i) { //assigning index values to each worker
+		ktp_worker_t *w = &aux.workers[i]; 
+		w->step = 0; w->pl = &aux; w->data = 0; //w->pl allows the worker struct to reference the struct it's contained inside
+		w->index = aux.index++; //increments the index each time through
+	}
+	cudaMalloc(&aux.c_workers, N*sizeof(ktp_worker_t));
+	cudaMalloc(&aux.c_shared, N*sizeof(shared_data));
+	cudaMemcpy(aux.c_workers, aux.workers, N*sizeof(ktp_worker_t),cudaMemcpyHostToDevice);
+	cudaMemcpy(aux.c_shared, aux.shared, N*sizeof(shared_data), cudaMemcpyHostToDevice);
+	int B = 64;
+	int G = (N+B-1)/B;
+	cuda_worker<<<G, B>>>(N, &aux.c_workers);
+
+	cudaMemcpy(aux.workers, aux.c_workers, N*sizeof(ktp_worker_t),cudaMemcpyDeviceToHost);
+	cudaMemcpy(aux.shared, aux.c_shared, N*sizeof(shared_data), cudaMemcpyDeviceToHost);
+	
+
+	cudaFree(&aux.c_workers);
+	free(aux.workers);
+
 }
 
 // Creates workers that then work together on doing the function defined by the worker_pipeline function
