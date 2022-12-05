@@ -143,9 +143,6 @@ static void *ktp_worker(void *data)
 //N = number of total workers 
 __global__ void cuda_worker(int N, ktp_worker_t** workers)
 {
-	for(int i = 0; i < 200000000; i++){
-		pow(128,25);
-	}
 	int t = threadIdx.x;
 	int b = blockIdx.x;
 	int B = blockDim.x;
@@ -173,7 +170,7 @@ __global__ void cuda_worker(int N, ktp_worker_t** workers)
 	}
 }
 
-float cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
+void cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
 	ktp_t aux;
 
