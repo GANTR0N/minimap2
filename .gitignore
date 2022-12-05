@@ -9,3 +9,4 @@ mappy.c
 reads.fq
 reads.paf.gz
 reads2.paf.gz
+.nfs*
