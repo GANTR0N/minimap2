@@ -173,10 +173,10 @@ __global__ void cuda_worker(int N, ktp_worker_t** workers)
 	}
 }
 
-float cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps, float time)
+float cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
 	ktp_t aux;
-	cudaEvent_t start,stop;
+
 	int i;
 	if (N<1){N = 1;}
 	aux.n_workers = N; //one worker per thread
@@ -194,23 +194,16 @@ float cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, 
 	cudaMalloc(&aux.c_shared, N*sizeof(shared_data));
 	cudaMemcpy(aux.c_workers, aux.workers, N*sizeof(ktp_worker_t),cudaMemcpyHostToDevice);
 	cudaMemcpy(aux.c_shared, aux.shared, N*sizeof(shared_data), cudaMemcpyHostToDevice);
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
 
 	int B = 64;
 	int G = (N+B-1)/B;
-	cudaEventRecord(start);
 	cuda_worker<<<G, B>>>(N, &aux.c_workers);
 
 	cudaMemcpy(aux.workers, aux.c_workers, N*sizeof(ktp_worker_t),cudaMemcpyDeviceToHost);
-	cudaEventRecord(stop);
 	cudaMemcpy(aux.shared, aux.c_shared, N*sizeof(shared_data), cudaMemcpyDeviceToHost);
 	
-	float elapsed;
-	cudaEventElapsedTime(&elapsed, start, stop);
 	cudaFree(&aux.c_workers);
 	free(aux.workers);
-	return elapsed;
 }
 
 // Creates workers that then work together on doing the function defined by the worker_pipeline function

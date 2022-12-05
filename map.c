@@ -645,7 +645,6 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 	
 	int i, pl_threads;
 	pipeline_t pl;
-	float elapsed = 0;
 	if (n_segs < 1) return -1;
 	memset(&pl, 0, sizeof(pipeline_t));
 	pl.n_fp = n_segs;
@@ -658,7 +657,8 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 		pl.fp_split = mm_split_init(opt->split_prefix, idx);
 	pl_threads = n_threads == 1? 1 : (opt->flag&MM_F_2_IO_THREADS)? 3 : 2;
 	if(opt->cuda > 0){
-		elapsed = cuda_pipeline(opt->cuda, worker_pipeline, &pl, 3, elapsed);
+		//If cuda flag has been used (-J[N])
+		cuda_pipeline(opt->cuda, worker_pipeline, &pl, 3); 
 	}
 	else{kt_pipeline(pl_threads, worker_pipeline, &pl, 3);}
 	

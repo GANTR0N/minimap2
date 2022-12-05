@@ -431,11 +431,11 @@ int main(int argc, char *argv[])
 		ret = 0;
 		if (!(opt.flag & MM_F_FRAG_MODE)) {
 			for (i = o.ind + 1; i < argc; ++i) {
-				ret = mm_map_file(mi, argv[i], &opt, n_threads); //look into this line
+				ret = mm_map_file(mi, argv[i], &opt, n_threads); //Maps the genome file
 				if (ret < 0) break;
 			}
 		} else {
-			ret = mm_map_file_frag(mi, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads); // look into this line
+			ret = mm_map_file_frag(mi, argc - (o.ind + 1), (const char**)&argv[o.ind + 1], &opt, n_threads); // Maps the genome file by parts
 		}
 		
 		mm_idx_destroy(mi);
