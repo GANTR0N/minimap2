@@ -645,6 +645,7 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 	
 	int i, pl_threads;
 	pipeline_t pl;
+	float elapsed = 0;
 	if (n_segs < 1) return -1;
 	memset(&pl, 0, sizeof(pipeline_t));
 	pl.n_fp = n_segs;
@@ -656,9 +657,10 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 	if (opt->split_prefix)
 		pl.fp_split = mm_split_init(opt->split_prefix, idx);
 	pl_threads = n_threads == 1? 1 : (opt->flag&MM_F_2_IO_THREADS)? 3 : 2;
-	if(opt->cuda > 0){cuda_pipeline(opt->cuda, worker_pipeline, &pl, 3);}
+	if(opt->cuda > 0){
+		elapsed = cuda_pipeline(opt->cuda, worker_pipeline, &pl, 3, elapsed);
+	}
 	else{kt_pipeline(pl_threads, worker_pipeline, &pl, 3);}
-	
 	
 	free(pl.str.s);
 	if (pl.fp_split) fclose(pl.fp_split);
@@ -670,7 +672,6 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 
 int mm_map_file(const mm_idx_t *idx, const char *fn, const mm_mapopt_t *opt, int n_threads)
 {
-	
 	return mm_map_file_frag(idx, 1, &fn, opt, n_threads);
 }
 
