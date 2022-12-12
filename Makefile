@@ -121,17 +121,17 @@ esterr.o: mmpriv.h minimap.h bseq.h kseq.h
 example.o: minimap.h kseq.h
 format.o: kalloc.h mmpriv.h minimap.h bseq.h kseq.h
 hit.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h khash.h
-index.o: kthread.h bseq.h minimap.h mmpriv.h kseq.h kvec.h kalloc.h khash.h
+index.o: kthread.cuh bseq.h minimap.h mmpriv.h kseq.h kvec.h kalloc.h khash.h
 index.o: ksort.h
 kalloc.o: kalloc.h
 ksw2_extd2_sse.o: ksw2.h kalloc.h
 ksw2_exts2_sse.o: ksw2.h kalloc.h
 ksw2_extz2_sse.o: ksw2.h kalloc.h
 ksw2_ll_sse.o: ksw2.h kalloc.h
-kthread.o: kthread.h
+kthread.o: kthread.cuh map.cuh
 lchain.o: mmpriv.h minimap.h bseq.h kseq.h kalloc.h krmq.h
 main.o: bseq.h minimap.h mmpriv.h kseq.h ketopt.h
-map.o: kthread.h kvec.h kalloc.h sdust.h mmpriv.h minimap.h bseq.h kseq.h
+map.o: kthread.cuh kvec.h kalloc.h sdust.h mmpriv.h minimap.h bseq.h kseq.h
 map.o: khash.h ksort.h
 misc.o: mmpriv.h minimap.h bseq.h kseq.h ksort.h
 options.o: mmpriv.h minimap.h bseq.h kseq.h

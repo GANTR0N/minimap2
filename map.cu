@@ -2,13 +2,14 @@
 #include <string.h>
 #include <assert.h>
 #include <errno.h>
-#include "kthread.h"
+#include "kthread.cuh"
 #include "kvec.h"
 #include "kalloc.h"
 #include "sdust.h"
 #include "mmpriv.h"
 #include "bseq.h"
 #include "khash.h"
+#include <cuda.h>
 
 struct mm_tbuf_s {
 	void *km;
@@ -622,6 +623,123 @@ static void *worker_pipeline(void *shared, int step, void *in)
     return 0;
 }
 
+
+
+__device__ static void *worker_p0(void *shared, int step, void *in)
+{
+	int i, j;
+    pipeline_t *p = (pipeline_t*)shared;
+    if (step == 0) { // step 0: read sequences
+		int with_qual = (!!(p->opt->flag & MM_F_OUT_SAM) && !(p->opt->flag & MM_F_NO_QUAL));
+		int with_comment = !!(p->opt->flag & MM_F_COPY_COMMENT);
+		int frag_mode = (p->n_fp > 1 || !!(p->opt->flag & MM_F_FRAG_MODE));
+        step_t *s;
+        s = (step_t*)calloc(1, sizeof(step_t));
+		if (p->n_fp > 1) s->seq = mm_bseq_read_frag2(p->n_fp, p->fp, p->mini_batch_size, with_qual, with_comment, &s->n_seq);
+		else s->seq = mm_bseq_read3(p->fp[0], p->mini_batch_size, with_qual, with_comment, frag_mode, &s->n_seq);
+		if (s->seq) {
+			s->p = p;
+			for (i = 0; i < s->n_seq; ++i)
+				s->seq[i].rid = p->n_processed++;
+			s->buf = (mm_tbuf_t**)calloc(p->n_threads, sizeof(mm_tbuf_t*));
+			for (i = 0; i < p->n_threads; ++i)
+				s->buf[i] = mm_tbuf_init();
+			s->n_reg = (int*)calloc(5 * s->n_seq, sizeof(int));
+			s->seg_off = s->n_reg + s->n_seq; // seg_off, n_seg, rep_len and frag_gap are allocated together with n_reg
+			s->n_seg = s->seg_off + s->n_seq;
+			s->rep_len = s->n_seg + s->n_seq;
+			s->frag_gap = s->rep_len + s->n_seq;
+			s->reg = (mm_reg1_t**)calloc(s->n_seq, sizeof(mm_reg1_t*));
+			for (i = 1, j = 0; i <= s->n_seq; ++i)
+				if (i == s->n_seq || !frag_mode || !mm_qname_same(s->seq[i-1].name, s->seq[i].name)) {
+					s->n_seg[s->n_frag] = i - j;
+					s->seg_off[s->n_frag++] = j;
+					j = i;
+				}
+			return s;
+		} else free(s);
+	}
+}
+
+__device__ static void *worker_p1(void *shared, int step, void *in){
+    pipeline_t *p = (pipeline_t*)shared;
+	if (step == 1) { // step 1: map
+		if (p->n_parts > 0) merge_hits((step_t*)in);
+		else kt_for(p->n_threads, worker_for, in, ((step_t*)in)->n_frag);
+		return in;
+    } 
+}
+
+__device__ static void *worker_p2(void *shared, int step, void *in){
+	int i, j, k;
+    pipeline_t *p = (pipeline_t*)shared;
+	if (step == 2) { // step 2: output
+		void *km = 0;
+        step_t *s = (step_t*)in;
+		const mm_idx_t *mi = p->mi;
+		for (i = 0; i < p->n_threads; ++i) mm_tbuf_destroy(s->buf[i]);
+		free(s->buf);
+		if ((p->opt->flag & MM_F_OUT_CS) && !(mm_dbg_flag & MM_DBG_NO_KALLOC)) km = km_init();
+		for (k = 0; k < s->n_frag; ++k) {
+			int seg_st = s->seg_off[k], seg_en = s->seg_off[k] + s->n_seg[k];
+			for (i = seg_st; i < seg_en; ++i) {
+				mm_bseq1_t *t = &s->seq[i];
+				if (p->opt->split_prefix && p->n_parts == 0) { // then write to temporary files
+					mm_err_fwrite(&s->n_reg[i],    sizeof(int), 1, p->fp_split);
+					mm_err_fwrite(&s->rep_len[i],  sizeof(int), 1, p->fp_split);
+					mm_err_fwrite(&s->frag_gap[i], sizeof(int), 1, p->fp_split);
+					for (j = 0; j < s->n_reg[i]; ++j) {
+						mm_reg1_t *r = &s->reg[i][j];
+						mm_err_fwrite(r, sizeof(mm_reg1_t), 1, p->fp_split);
+						if (p->opt->flag & MM_F_CIGAR) {
+							mm_err_fwrite(&r->p->capacity, 4, 1, p->fp_split);
+							mm_err_fwrite(r->p, r->p->capacity, 4, p->fp_split);
+						}
+					}
+				} else if (s->n_reg[i] > 0) { // the query has at least one hit
+					for (j = 0; j < s->n_reg[i]; ++j) {
+						mm_reg1_t *r = &s->reg[i][j];
+						assert(!r->sam_pri || r->id == r->parent);
+						if ((p->opt->flag & MM_F_NO_PRINT_2ND) && r->id != r->parent)
+							continue;
+						if (p->opt->flag & MM_F_OUT_SAM)
+							mm_write_sam3(&p->str, mi, t, i - seg_st, j, s->n_seg[k], &s->n_reg[seg_st], (const mm_reg1_t*const*)&s->reg[seg_st], km, p->opt->flag, s->rep_len[i]);
+						else
+							mm_write_paf3(&p->str, mi, t, r, km, p->opt->flag, s->rep_len[i]);
+						mm_err_puts(p->str.s);
+					}
+				} else if ((p->opt->flag & MM_F_PAF_NO_HIT) || ((p->opt->flag & MM_F_OUT_SAM) && !(p->opt->flag & MM_F_SAM_HIT_ONLY))) { // output an empty hit, if requested
+					if (p->opt->flag & MM_F_OUT_SAM)
+						mm_write_sam3(&p->str, mi, t, i - seg_st, -1, s->n_seg[k], &s->n_reg[seg_st], (const mm_reg1_t*const*)&s->reg[seg_st], km, p->opt->flag, s->rep_len[i]);
+					else
+						mm_write_paf3(&p->str, mi, t, 0, 0, p->opt->flag, s->rep_len[i]);
+					mm_err_puts(p->str.s);
+				}
+			}
+			for (i = seg_st; i < seg_en; ++i) {
+				for (j = 0; j < s->n_reg[i]; ++j) free(s->reg[i][j].p);
+				free(s->reg[i]);
+				free(s->seq[i].seq); free(s->seq[i].name);
+				if (s->seq[i].qual) free(s->seq[i].qual);
+				if (s->seq[i].comment) free(s->seq[i].comment);
+			}
+		}
+		free(s->reg); free(s->n_reg); free(s->seq); // seg_off, n_seg, rep_len and frag_gap were allocated with reg; no memory leak here
+		km_destroy(km);
+		if (mm_verbose >= 3)
+			fprintf(stderr, "[M::%s::%.3f*%.2f] mapped %d sequences\n", __func__, realtime() - mm_realtime0, cputime() / (realtime() - mm_realtime0), s->n_seq);
+		free(s);
+	}
+    return 0;
+}
+
+__device__ static void *worker_caller(void *shared, int step, void *in)
+{
+	if(step == 0){ return worker_p0(shared, step, in);}
+	if(step == 1){ return worker_p1(shared, step, in);}
+	if(step == 2){ return worker_p2(shared, step, in);}
+}
+
 static mm_bseq_file_t **open_bseqs(int n, const char **fn)
 {
 	mm_bseq_file_t **fp;
@@ -658,7 +776,7 @@ int mm_map_file_frag(const mm_idx_t *idx, int n_segs, const char **fn, const mm_
 	pl_threads = n_threads == 1? 1 : (opt->flag&MM_F_2_IO_THREADS)? 3 : 2;
 	if(opt->cuda > 0){
 		//If cuda flag has been used (-J[N])
-		cuda_pipeline(opt->cuda, worker_pipeline, &pl, 3); 
+		cuda_pipeline(opt->cuda, worker_caller, &pl, 3); 
 	}
 	else{kt_pipeline(pl_threads, worker_pipeline, &pl, 3);}
 	

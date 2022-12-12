@@ -3,7 +3,8 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdint.h>
-#include "kthread.h"
+#include "kthread.cuh"
+#include "map.cuh"
 #include <cuda.h>
 
 #if (defined(WIN32) || defined(_WIN32)) && defined(_MSC_VER)
@@ -77,26 +78,6 @@ void kt_for(int n_threads, void (*func)(void*,long,int), void *data, long n)
  * kt_pipeline() *
  *****************/
 
-struct ktp_t;
-
-typedef struct {
-	struct ktp_t *pl;
-	int64_t index;
-	int step;
-	void *data;
-} ktp_worker_t;
-
-typedef struct ktp_t {
-	void *shared;
-	void *c_shared;
-	void *(*func)(void*, int, void*);
-	int64_t index;
-	int n_workers, n_steps;
-	ktp_worker_t *workers;
-	ktp_worker_t *c_workers;
-	pthread_mutex_t mutex;
-	pthread_cond_t cv;
-} ktp_t;
 
 
 //uses several threads, look into pthread.c
@@ -141,8 +122,12 @@ static void *ktp_worker(void *data)
 
 //Data = a worker struct
 //N = number of total workers 
-__global__ void cuda_worker(int N, ktp_worker_t** workers)
+__global__ void cuda_worker(int N, ktp_worker_t** workers, void *shared_data)
 {
+	extern __shared__ float s_tmp[];
+	float *shared = s_tmp;
+	fprintf(stderr, "output");
+
 	int t = threadIdx.x;
 	int b = blockIdx.x;
 	int B = blockDim.x;
@@ -152,17 +137,17 @@ __global__ void cuda_worker(int N, ktp_worker_t** workers)
 		ktp_worker_t *w = workers[n];
 	
 		ktp_t *p = w->pl;
-		if(w->step < 3){
+		if(w->step == 0){
 			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
 		}
 		__syncthreads();
 		w->step = w->step+1;
-		if(w->step < 3){
+		if(w->step == 1){
 			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
 		}
 		__syncthreads();
 		w->step = w->step+1;
-		if(w->step < 3){
+		if(w->step == 2){
 			w->data = p->func(p->shared, w->step, w->step? w->data : 0);
 		}
 		__syncthreads();
@@ -170,11 +155,15 @@ __global__ void cuda_worker(int N, ktp_worker_t** workers)
 	}
 }
 
+typedef void* (*func)(void* shared, int step, void* in);
+__device__ func c_func = worker_caller;
+
 void cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, int n_steps)
 {
 	ktp_t aux;
-
+	void *c_shared;
 	int i;
+
 	if (N<1){N = 1;}
 	aux.n_workers = N; //one worker per thread
 	aux.n_steps = n_steps; //number of steps
@@ -188,13 +177,14 @@ void cuda_pipeline(int N, void *(*func)(void*, int, void*), void *shared_data, i
 		w->index = aux.index++; //increments the index each time through
 	}
 	cudaMalloc(&aux.c_workers, N*sizeof(ktp_worker_t));
-	cudaMalloc(&aux.c_shared, N*sizeof(shared_data));
+	cudaMalloc(&c_shared, sizeof(shared_data));
 	cudaMemcpy(aux.c_workers, aux.workers, N*sizeof(ktp_worker_t),cudaMemcpyHostToDevice);
-	cudaMemcpy(aux.c_shared, aux.shared, N*sizeof(shared_data), cudaMemcpyHostToDevice);
+	cudaMemcpy(c_shared, aux.shared, sizeof(shared_data), cudaMemcpyHostToDevice);
+	cudaMemcpyFromSymbol(&func, c_func, sizeof(func));
 
 	int B = 64;
 	int G = (N+B-1)/B;
-	cuda_worker<<<G, B>>>(N, &aux.c_workers);
+	cuda_worker<<<G, B>>>(N, &aux.c_workers, c_shared);
 
 	cudaMemcpy(aux.workers, aux.c_workers, N*sizeof(ktp_worker_t),cudaMemcpyDeviceToHost);
 	cudaMemcpy(aux.shared, aux.c_shared, N*sizeof(shared_data), cudaMemcpyDeviceToHost);

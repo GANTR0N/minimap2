@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #define __STDC_LIMIT_MACROS
-#include "kthread.h"
+#include "kthread.cuh"
 #include "bseq.h"
 #include "minimap.h"
 #include "mmpriv.h"
